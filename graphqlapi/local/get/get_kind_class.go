@@ -72,6 +72,11 @@ func buildPrimitiveField(propertyType schema.PropertyDataType,
 			Description: property.Description,
 			Name:        property.Name,
 			Type:        graphql.String,
+			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+				// fmt.Printf("\n\n\nprimitive type resolver for class %s:\n%#v\n\n\n", className, p.Source)
+				return p.Source.(map[string]interface{})[p.Info.FieldName], nil
+
+			},
 		}
 	case schema.DataTypeText:
 		return &graphql.Field{
@@ -154,8 +159,18 @@ func buildReferenceField(propertyType schema.PropertyDataType,
 		Name:  fmt.Sprintf("%s%s%s", className, propertyName, "Obj"),
 		Types: dataTypeClasses,
 		ResolveType: func(p graphql.ResolveTypeParams) *graphql.Object {
-			// TODO: inspect type of result.
-			return (*knownClasses)["City"]
+
+			valueMap := p.Value.(map[string]interface{})
+			if valueMap["__refClassType"].(string) == "local" {
+				className := valueMap["__refClassName"].(string)
+				return (*knownClasses)[className]
+			} else {
+				className := valueMap["__refClassName"].(string)
+				peerName := valueMap["__refClassPeerName"].(string)
+				return knownRefClasses[crossrefs.NetworkClass{ClassName: className, PeerName: peerName}]
+
+			}
+
 		},
 		Description: property.Description,
 	})
@@ -165,7 +180,42 @@ func buildReferenceField(propertyType schema.PropertyDataType,
 	return &graphql.Field{
 		Type:        classUnion,
 		Description: property.Description,
+		Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+
+			item := p.Source.(map[string]interface{})[p.Info.FieldName].([]interface{})[0]
+			switch v := item.(type) {
+			case LocalRef:
+				v.Fields["__refClassType"] = "local"
+				v.Fields["__refClassName"] = v.AtClass
+				fmt.Printf("\n\n\n in class union resolver we are returning %#v \n\n\n", v.Fields)
+				return v.Fields, nil
+
+			case NetworkRef:
+				result := map[string]interface{}{
+					"__refClassType":     "network",
+					"__refClassName":     "Country",
+					"__refClassPeerName": "WeaviateB",
+					"name":               "hard-coded, but should be network resolved",
+				}
+				fmt.Printf("\n\n\n in class union resolver we are returning %#v \n\n\n", result)
+				return result, nil
+
+			default:
+				return nil, fmt.Errorf("unsupported type %t", v)
+			}
+
+		},
 	}
+}
+
+type NetworkRef struct {
+	AtClass string
+	RawRef  map[string]interface{}
+}
+
+type LocalRef struct {
+	AtClass string
+	Fields  map[string]interface{}
 }
 
 func buildGetClassField(classObject *graphql.Object, k kind.Kind,
