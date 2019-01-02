@@ -175,35 +175,34 @@ func buildReferenceField(propertyType schema.PropertyDataType,
 		Description: property.Description,
 	})
 
-	// TODO: Check cardinality
-
 	return &graphql.Field{
-		Type:        classUnion,
+		Type:        graphql.NewList(classUnion),
 		Description: property.Description,
 		Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+			items := p.Source.(map[string]interface{})[p.Info.FieldName].([]interface{})
+			results := make([]interface{}, len(items), len(items))
+			for i, item := range items {
+				switch v := item.(type) {
+				case LocalRef:
+					localRef := v.Fields
+					localRef["__refClassType"] = "local"
+					localRef["__refClassName"] = v.AtClass
+					results[i] = localRef
 
-			item := p.Source.(map[string]interface{})[p.Info.FieldName].([]interface{})[0]
-			switch v := item.(type) {
-			case LocalRef:
-				v.Fields["__refClassType"] = "local"
-				v.Fields["__refClassName"] = v.AtClass
-				fmt.Printf("\n\n\n in class union resolver we are returning %#v \n\n\n", v.Fields)
-				return v.Fields, nil
+				case NetworkRef:
+					networkRef := map[string]interface{}{
+						"__refClassType":     "network",
+						"__refClassName":     "Country",
+						"__refClassPeerName": "WeaviateB",
+						"name":               "hard-coded, but should be network resolved",
+					}
+					results[i] = networkRef
 
-			case NetworkRef:
-				result := map[string]interface{}{
-					"__refClassType":     "network",
-					"__refClassName":     "Country",
-					"__refClassPeerName": "WeaviateB",
-					"name":               "hard-coded, but should be network resolved",
+				default:
+					return nil, fmt.Errorf("unsupported type %t", v)
 				}
-				fmt.Printf("\n\n\n in class union resolver we are returning %#v \n\n\n", result)
-				return result, nil
-
-			default:
-				return nil, fmt.Errorf("unsupported type %t", v)
 			}
-
+			return results, nil
 		},
 	}
 }
@@ -269,9 +268,6 @@ func makeResolveGetClass(k kind.Kind, className string) graphql.FieldResolveFn {
 			return nil, err
 		}
 
-		// fmt.Print("\n\n\n\n\n")
-		// spew.Dump(properties)
-		// fmt.Print("\n\n\n\n\n")
 		filters, err := common_filters.ExtractFilters(p.Args, p.Info.FieldName)
 		if err != nil {
 			return nil, fmt.Errorf("could not extract filters: %s", err)
